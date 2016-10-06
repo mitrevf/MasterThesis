@@ -1,0 +1,76 @@
+STEPS:
+0. Prerequsites for running the experiments:
+-Ubuntu-based OS
+-MATLAB, with libSVM installed and path added to it (step 8.). Note: should overwrite the original 'svmtrain' function. 
+-For the creation of LMDB databases, a clean installation of Caffe framework is needed (step 4.) with all the dependencies Caffe has throughout the installation mentioned in the official install guide. In step 4. the "Tools" variable should point to the path in Caffe/build/tools.
+-An installation of Torch framework is required with the dependencies described in the install walkthrough from the official source.
+- CUDA, CuDNN library from Nvidia official site is needed. (check CUDA with -'nvcc version' command, if not present should add to the library path, for ex. "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH"). In Torch, run -require 'cutorch' to check if GPU support is available in Torch via CUDA.
+- Via 'luarocks' additional Lua packages might need to be installed: 'nn', 'cunn', 'image', 'matio'.
+-If experiencing problems with running any of the following scripts, a possible solution might be running in superuser mode (-sudo su). 
+
+1. Datasets and ground truth available in folder datasets+PCA. Acquired from http://www.ehu.eus/ccwintco/index.php?title=Hyperspectral_Remote_Sensing_Scenes [15/09/2016].
+
+2. Move to MATLAB. First, preprocessing script is DemoPCA.m (contained in same folder as this readme file). PCA is implemented and afterwards, using the ground truth (gt parameter) images are cropped for the labeled pixels, saving them in the current folder. Run the script with 3 parameters, for example: 
+[reduced,explained]=DemoPCA(input_data,3,gt). First and third parameters are the matrix of the dataset and the corresponding ground truth, acquired from the link in point 1.
+
+3. Run editpaths.m in MATLAB, while correcting the paths for the dataset in question. The two written files will be input to the next step.
+
+4. Create databases with create_lmdb.sh bash script, also changing the PATHs needed:
+-EXAMPLE #path to the folder where the DB will be saved
+-DATA #path to the files written in step 2 from the readme, or .txt -file with labels of the images
+-TOOLS #path to convert_imageset tool from Caffe framework.
+-TRAIN_DATA_ROOT #path to the actual folder where images are contained
+-also check the $DATA and $EXAMPLE variables below and add extensions accordingly (previous vars lead to the folder, below is just the filename). 
+After this step, we should already have .mdb databases for each train and test sets, randomly distributed. Labels are also kept, although not used in the training process afterwards.
+
+---------------------------------
+In case any problems occured during the creation of the databases (requirements of libraries,etc), in the folder "lmdb ready databases" there are already created test and train sets for indian pines data. So, all the previous 4 steps could be skipped and just move on to Torch with these data files.
+
+5. Move to Torch7 framework. Open the CAE/scripts/train.lua script. Change PATHs accordingly:
+-require '../core/newae.lua' should be changed to the CAE model You are willing to use, built in CAE/core folder. Reccomend newae(model2).lua and newae2(model1).lua.
+-require '../io/lmdb_reader' , in the CAE/io folder is this script for reading lmdb databases in Torch. Requirements for this are met by 2 Terminal lines below via luarocks(luarocks installed with Torch7):
+luarocks install https://raw.githubusercontent.com/eladhoffer/lmdb.torch/master/lmdb.torch-scm-1.rockspec
+luarocks install protobuf
+-in defaults section the parameters for the training are fine-tuned. save_path is the file where the trained autoencoder will be saved(.bin extension).
+-data_path is the only argument to this script, the folder containing the created datasets. Note, You can use the path to the "/lmdb ready databases/" folder for this.
+
+The result of this step is a finished, trained CAE with given training error in Torch7 command line output and saved CAE in he save_path parameter.
+------------------------------------------
+You can also skip all the previous steps and start from 6. and using the already trained CAE, "newautoencoder.bin" , located in CAE/scripts. newautoencoder.bin is trained on Indian Pines dataset with newae(model2).
+
+6. Open the CAE/scripts/test.lua script, for testing the trained CAE. Runs also in Torch. 
+-require '../core/newae.lua'  should be changed to the same CAE model from CAE/core used for training.
+-in "defaults" we have parameters for the number of samples we want to forward-pass through the network, or encode them. 3 for both parameters will pass 3x3=9 samples through the network.
+-this script (test.lua) is run with 2 arguments, first is "net_path" - path to the network we are using (.bin file from previous step) and second argument is "data_path" - path to lmdb test dataset.
+-"input_filename" and "output_filename" are the paths to the original and reconstructed image accordingly. 
+
+After this step, we should have the number of images specified in "defaults" section, for every sample the original and the encoded image. Results may be similar as in CAE/scripts/IndianPinesTested/.
+This step is not mandatory and is just a sanity check; to see if the real training error translates well in practice(if original and encoded images are similar), so it can be ignored.
+
+7. Still in Torch, edit and run CAE/scripts/forward pass CAE+prepare for SVM.lua. Here we remove the reconstruction layers from the CAE, pass forward the input data and save the outputs for SVM classification & training in a .mat extension, ready for MATLAB.
+- require '../core/newae2.lua' should be changed to CAE/core model of CAE used.
+- require '../io/lmdb_reader' might need to be edited to the right path of the lmdb_reader.lua.
+- matt=require 'matio' - matio is a Lua-to-MATLAB interface. Package needs to be installed via luarocks.
+- train = lmdb_reader('/home/filip/caffe/examples/imagenet/salinas_train') - should be edited to the path containing the train dataset.
+- ae:load('pavia.bin') - should be changed to the actual autoencoder file.
+- for i=1,8 do ae.net:remove(10). - Should be eedited to the number of layers we need to remove, depending on the model of CAE we use. The whole architecture of the CAE can be seen with the ae.net() command in Torch,detailing every layer.
+- Data is passed through in batches of 1000. Number of such batches is hardcoded and should be changed for the correct number of input samples for train and test. Second loop is for the <1000 samples left.
+- matt.save('salinaspavia_data_train.mat',data), matt.save('salinaspavia_labels_train.mat',labels); - these lines save the output in a .mat matrices, one for the data and another matrix only for the labels.
+- Last two points also stand for the test loops afterwards, as well as changing the path to the test set in test=lmdb_reader(...)
+
+The output from this script are 4 files, two each for train and test for SVMs (one is data, other is labels). These files are in .mat format, easily read in MATLAB.
+---------------------------------------
+Note that an example of such output is contained in CAE/scripts and files named the same can be used directly in an MATLAB environment for training and evaluating a SVM classifier.
+
+8. We return to MATLAB. Install the required libSVM library for MATLAB and run the command addpath('path_to_libsvm') so it should add the function in the matlab environment.
+Open the svm.m script in matlab, which is the last step.
+
+We edit the following paths to the required .mat files for labels and values of test and train sets:
+    labs=load('salinaspavia_labels_train.mat');
+    vals=load('salinaspavia_data_train.mat');
+    labs_test=load('salinaspavia_labels_test.mat');
+    vals_test=load('salinaspavia_data_test.mat');
+
+-var 'prob' keeps the probability of each class, while in var 'pred' the prediction for each test sample is kept. From 'pred' variable we derive the accuracy metric. 
+Variable 'C' is the confusion matrix for better interpreting of the results and 'mykappa' variable holds the kappa index metric for evaluation of the classification experiment.
+-Kappa Index (kappa(C) function) - passed argument is the confusion matrix. Requires the 'kappa.m' script, which exists in the same folder as this readme file. 
